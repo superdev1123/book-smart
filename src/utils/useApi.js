@@ -1,0 +1,1424 @@
+import axios from './axios';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Alert } from 'react-native';
+
+export const Signup = async (userData, endpoint) => {
+  try {
+    const response = await axios.post(`api/${endpoint}/signup`, userData);
+    return response.data;
+  } catch (error) {
+    return {error: error};
+  }
+};
+/** Normalize errors into a consistent shape */
+const normalizeError = (err) => {
+  // Axios error?
+  if (err && err.isAxiosError) {
+    const status = err.response?.status;
+    const data = err.response?.data;
+    const message =
+      data?.message ||
+      err.message ||
+      'Network or server error';
+    return { code: status, message, details: data };
+  }
+  // Generic
+  return { code: undefined, message: err?.message ?? String(err) };
+};
+
+/** GET assigned shifts for the logged-in user (reads aic from AsyncStorage) */
+export const getAssignedShifts = async (endpoint) => {
+  try {
+    const aicStr = await AsyncStorage.getItem('aic');
+    console.log(aicStr);
+    console.log(endpoint);
+    if (!aicStr) throw new Error('Missing AIC in storage');
+    const userId = Number(aicStr);
+    const res = await axios.post(
+      `api/${endpoint}/getAssignedShift`,
+      { userId });
+
+    console.log("getAssignedShifts", res.data?.assignedShift);
+
+    const list = Array.isArray(res.data?.assignedShift)
+      ? res.data.assignedShift
+      : [];
+
+    return { ok: true, data: list };
+  } catch (err) {
+    return { ok: false, error: normalizeError(err) };
+  }
+};
+
+/**
+ * Update one assigned shift status from the user side.
+ * status must be one of: "accept" | "reject" | "cancel"
+ * Returns { ok, data } on success (adminRowsUpdated >= 1), else { ok:false, error }
+ */
+export const setStatusFromUser = async ({endpoint, assignedShiftId, status }) => {
+  try {
+    const aicStr = await AsyncStorage.getItem('aic');
+    const existingToken = await AsyncStorage.getItem('token');
+    if (!aicStr) throw new Error('Missing AIC in storage');
+
+    const payload = {
+      userAic: Number(aicStr),
+      assignedShiftId: Number(assignedShiftId),
+      status, // 'accept' | 'reject' | 'cancel'
+    };
+
+    const res = await axios.post(
+      `api/${endpoint}/setStatusFromUser`, 
+      payload,
+      { headers: {
+        Authorization: `Bearer ${existingToken}`,
+      }},
+    );
+
+    // Robust success check: message text + rows updated
+    const okByRows = typeof res.data?.adminRowsUpdated === 'number'
+      ? res.data.adminRowsUpdated > 0
+      : true; // if backend omits it, still treat 200 as success
+
+    const okByMessage = typeof res.data?.message === 'string'
+      ? /synchron/i.test(res.data.message) || /ok/i.test(res.data.message)
+      : true;
+
+    if (okByRows && okByMessage) {
+      return { ok: true, data: res.data };
+    }
+
+    // 200 but backend signals failure
+    return {
+      ok: false,
+      error: {
+        code: res.status,
+        message: res.data?.message || 'Update failed',
+        details: res.data,
+      },
+    };
+  } catch (err) {
+    return { ok: false, error: normalizeError(err) };
+  }
+};
+
+export const Signin = async (credentials, endpoint) => {
+  try {
+    const response = await axios.post(`api/${endpoint}/login`, credentials);
+    
+    if (response.data.token) {
+      // console.log(response.data.token);
+      await AsyncStorage.setItem('token', response.data.token);
+
+      const aic = response.data.user?.aic;
+      const userRole = response.data.user?.userRole;
+      if (aic !== undefined && aic !== null) {
+        await AsyncStorage.setItem('aic', aic.toString());
+        await AsyncStorage.setItem('HireRole', userRole.toString());
+      } else {
+        console.warn('Warning: aic is undefined or null. Skipping save.');
+      }
+    }
+
+    return response.data;
+  } catch (error) {
+    return { error: error };
+  }
+}
+
+
+export const sendFCMToken = async (credentials, endpoint) => {
+  try {
+    const response = await axios.post(`api/${endpoint}/saveFCMToken`, credentials);
+    return response.data;
+  } catch (error) {
+    console.error(error)    
+    return {error: error.response.data.message};
+  }
+}
+
+export const getShiftTypes = async (userData, endpoint) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+
+    const response = await axios.post(
+      `/api/${endpoint}/getShiftTypes`, userData, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`,
+      },
+    });
+
+    if (response.data.token) {
+      await AsyncStorage.setItem('token', response.data.token);
+    }
+    return response.data;
+  } catch (error) {
+    // ✅ Log error response clearly
+    if (error.response) {
+    } else if (error.request) {
+      console.error("❌ AXIOS ERROR: No response received");
+      console.error(error.request);
+    } else {
+      console.error("❌ AXIOS SETUP ERROR:", error.message);
+    }
+    return { error };
+  }
+};
+
+export const addShiftType = async (body, endpoint) => {
+  try {
+    const token = await AsyncStorage.getItem('token');
+    const response = await axios.post(`/api/${endpoint}/addShiftType`, body, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error("addShiftType error:", error.response?.data || error.message);
+    return { error };
+  }
+};
+
+export const deleteShiftType = async (body, endpoint) => {
+  try {
+    const token = await AsyncStorage.getItem('token');
+    const response = await axios.post(`/api/${endpoint}/deleteShiftType`, body, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (response.data.token) {
+      await AsyncStorage.setItem('token', response.data.token);
+    }
+
+    return response.data;
+  } catch (error) {
+    console.error('deleteShiftType error:', error.message || error);
+    return { error };
+  }
+};
+
+export const updateShiftType = async (body, endpoint) => {
+  try {
+    const token = await AsyncStorage.getItem('token');
+    const response = await axios.post(`/api/${endpoint}/updateShiftType`, body, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (response.data.token) {
+      await AsyncStorage.setItem('token', response.data.token);
+    }
+
+    return response.data;
+  } catch (error) {
+    console.error('deleteShiftType error:', error.message || error);
+    return { error };
+  }
+};
+
+export const addStaffToManager = async (endpoint, managerAic, staffList) => {
+  try {
+    const token = await AsyncStorage.getItem('token');
+    const response = await axios.post(
+      `/api/${endpoint}/addStaffToManager`, {
+      managerAic,
+      staffList,
+    }, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    return response.data;
+  } catch (error) {
+    console.error('addStaffToManager error:', error);
+    return { error };
+  }
+};
+
+export const addShiftToStaff = async (endpoint, managerAic, staffId, shifts) => {
+  try {
+    const token = await AsyncStorage.getItem('token');
+    const response = await axios.post(
+      `/api/${endpoint}/addShiftToStaff`,
+      {
+        managerAic,
+        staffId,
+        shifts,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+    const data = response.data || {};
+    return {
+      success: true,
+      message: data.message ?? 'Shift(s) added.',
+      staffInfo: data.staffInfo ?? [],
+    };
+  } catch (error) {
+    console.error('addShiftToStaff error:', error?.response?.data || error);
+    return {
+      success: false,
+      message: error?.response?.data?.message || 'Request failed.',
+      error,
+    };
+  }
+};
+
+export const getAllUsersInRestau = async (endpoint) => {
+  try {
+    const token = await AsyncStorage.getItem('token');
+    // console.log(token);
+    const response = await axios.get(`/api/${endpoint}/acknowledgedUsers`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    // console.log('✅ Users fetched:', response.data?.users);
+    return response.data?.users || []; 
+  } catch (error) {
+    console.error('get all user error:', error.message || error);
+    return { error };
+  }
+};
+
+export const getStaffShiftInfo = async (endpoint, managerAic) => {
+  try {
+    const token = await AsyncStorage.getItem('token');
+
+    const response = await axios.post(
+      `/api/${endpoint}/getAllStaffShiftInfo`,
+      { managerAic },
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+
+    if (response.data && response.data.staffInfo) {
+      return response.data.staffInfo;
+    } else {
+      return [];
+    }
+  } catch (error) {
+    console.error('getStaffShiftInfo error:', error.message || error);
+    return [];
+  }
+};
+
+export const deleteStaffFromManager = async (endpoint, managerAic, staffId) => {
+  try {
+    const token = await AsyncStorage.getItem('token');
+    const response = await axios.post(
+      `/api/${endpoint}/deleteStaffFromManager`,
+      {
+        managerAic,
+        staffId: staffId.toString(), // ensure it's a string if needed
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+    return response.data;
+  } catch (error) {
+    // ✅ Log error response clearly
+    if (error.response) {
+    } else if (error.request) {
+      console.error("❌ AXIOS ERROR: No response received");
+      console.error(error.request);
+    } else {
+      console.error("❌ AXIOS SETUP ERROR:", error.message);
+    }
+    return { error };
+  }
+};
+
+export const deleteShiftFromStaff = async (endpoint, managerAic, staffId, shiftId) => {
+  try {
+    const token = await AsyncStorage.getItem('token');
+    const response = await axios.post(
+      `/api/${endpoint}/deleteShiftFromStaff`,
+      {
+        managerAic,
+        staffId: staffId.toString(), // keep staffId format consistent
+        shiftId
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+    
+    return { success: true, message: response.data.message || 'Shift deleted successfully.' };
+
+  } catch (error) {
+    // Handle different types of errors and return a consistent structure
+    if (error.response) {
+      console.error("❌ AXIOS RESPONSE ERROR:", error.response.data);
+      return { success: false, message: error.response.data.message || 'Error occurred during deletion' };
+    } else if (error.request) {
+      console.error("❌ AXIOS ERROR: No response received");
+      console.error(error.request);
+      return { success: false, message: 'No response received from the server.' };
+    } else {
+      console.error("❌ AXIOS SETUP ERROR:", error.message);
+      return { success: false, message: 'Error setting up request.' };
+    }
+  }
+};
+
+export async function editShiftFromStaff(
+  endpoint,
+  managerAic,
+  staffId,
+  shiftId,
+  newDate,
+  newTime
+) {
+  try {
+    const token = await AsyncStorage.getItem('token');
+
+    const { status, data } = await axios.post(
+      `/api/${endpoint}/editShiftFromStaff`,
+      { managerAic, staffId, shiftId, newDate, newTime },
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+
+    // axios returns data directly; no response.json()
+    return {
+      success: status === 200,
+      status,
+      data,
+      message: data?.message,
+    };
+  } catch (error) {
+    const status = error?.response?.status ?? 0;
+    const message =
+      error?.response?.data?.message ??
+      error?.message ??
+      'Request failed';
+    // optional: console diagnostics
+    console.error('editShiftFromStaff error:', {
+      status,
+      message,
+      data: error?.response?.data,
+    });
+    return { success: false, status, message, data: error?.response?.data };
+  }
+}
+
+
+
+export const getAllFacility = async (userData, endpoint) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.post(`api/${endpoint}/getAllFacilities`, userData, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+    if (response.data.token) {
+      await AsyncStorage.setItem('token', response.data.token);
+    }
+    return response.data;
+  } catch (error) {
+    console.log(error);
+    return {error: error};
+  }
+}
+
+export const getAllHotelAndRestaurants = async (userData, endpoint) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.post(`api/${endpoint}/getAllHotelAndRestaurants`, userData, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+    if (response.data.token) {
+      await AsyncStorage.setItem('token', response.data.token);
+    }
+    return response.data;
+  } catch (error) {
+    console.log(error);
+    return {error: error};
+  }
+}
+
+export const ForgotPassword = async (credentials, endpoint) => {
+  try {
+    console.log("login");
+    const response = await axios.post(`api/${endpoint}/forgotPassword`, credentials);
+    return response.data;
+  } catch (error) {
+    console.error(error)    
+    return {error: error.response.data.message};
+  }
+}
+
+export const PhoneSms = async (credentials, endpoint) => {
+  try {
+    console.log("login");
+    const response = await axios.post(`api/${endpoint}/phoneSms`, credentials);
+    console.log(response);
+    return response.data;
+  } catch (error) {
+    console.error(error)    
+    return {error: error.response.data.message};
+  }
+}
+
+export const VerifyCodeSend = async (credentials, endpoint) => {
+  try {
+    const response = await axios.post(`api/${endpoint}/verifyCode`, credentials);
+    return response;
+  } catch (error) {    
+    return {error: error.response.data.message};
+  }
+}
+
+export const VerifyPhoneCodeSend = async (credentials, endpoint) => {
+  try {
+    const response = await axios.post(`api/${endpoint}/verifyPhone`, credentials);
+    if (response.data.verifyCode) {
+      await AsyncStorage.setItem('token', response.data.verifyCode);
+    }
+    return response.data;
+  } catch (error) {
+    return {error: error.response.data.message};
+  }
+}
+
+export const getUserInfo = async (data, endpoint) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.post(`api/${endpoint}/getUserInfo`, data, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+
+    if (response.data.token) {
+      await AsyncStorage.setItem('token', response.data.token);
+    }
+    return response.data;
+  } catch (error) {
+    return {error: error}
+  }
+};
+
+export const getUserProfile = async (data, endpoint) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.post(`api/${endpoint}/getUserProfile`, data, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+
+    if (response.status === 200) {
+      if (response.data.token) {
+        await AsyncStorage.setItem('token', response.data.token);
+      }
+    } 
+    return response.data;
+  } catch (error) {
+    return {error: error}
+  }
+};
+
+export const updatePassword = async (data, endpoint) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.post(`api/${endpoint}/updatePassword`, data, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+
+    if (response.status === 200) {
+      if (response.data.token) {
+        await AsyncStorage.setItem('token', response.data.token);
+      }
+    } 
+    return response.data;
+  } catch (error) {
+    return {error: error}
+  }
+};
+
+export const ResetPassword = async (credentials, endpoint) => {
+  try {
+    const response = await axios.post(`api/${endpoint}/resetPassword`, credentials);
+    return response.data;
+  } catch (error) { 
+    return {error: error.response.data.message};
+  }
+}
+
+export const Update = async (updateData, endpoint) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    console.log(existingToken);
+    const response = await axios.post(`api/${endpoint}/update`, updateData, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+
+    if (response.data.token) {
+      await AsyncStorage.setItem('token', response.data.token);
+    }
+    return response.data;
+  } catch (error) {
+    return {error: error}
+  }
+}
+
+export const addDegreeItem = async (data, endpoint) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.post(`api/${endpoint}/addItem`, data, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+
+    if (response.status === 200) {
+      if (response.data.token) {
+        await AsyncStorage.setItem('token', response.data.token);
+      }
+    } 
+    return response.data;
+  } catch (error) {
+    return {error: error}
+  }
+}
+
+export const getDegreeList = async (endpoint) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.get(`api/${endpoint}/getList`, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+
+    if (response.status === 200) {
+      if (response.data.token) {
+        await AsyncStorage.setItem('token', response.data.token);
+      }
+    } 
+    return response.data;
+  } catch (error) {
+    return {error: error}
+  }
+}
+
+export const getTitleList = async (type) => {
+  try {
+    const response = await axios.get(`api/title/getTitles?type=${type}`);
+    console.log(response.data);
+    return response.data;
+  } catch (error) {
+    return {error: error}
+  }
+}
+
+export const addTitle = async (data) => {
+  try {
+    const response = await axios.post(`api/title/addTitle`, data);
+    return response.data;
+  } catch (error) {
+    return {error: error}
+  }
+}
+
+export const getFacilityInfo = async (data, endpoint) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.post(`api/${endpoint}/getFacilityInfo`, data, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+
+    if (response.status === 200) {
+      if (response.data.token) {
+        await AsyncStorage.setItem('token', response.data.token);
+      }
+    } 
+    return response.data;
+  } catch (error) {
+    return {error: error}
+  }
+}
+
+export const getHotelAndRestaurantInfo = async (data, endpoint) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.post(`api/${endpoint}/getHotelAndRestaurantInfo`, data, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+
+    if (response.status === 200) {
+      if (response.data.token) {
+        await AsyncStorage.setItem('token', response.data.token);
+      }
+    } 
+    return response.data;
+  } catch (error) {
+    return {error: error}
+  }
+}
+
+export const addLocationItem = async (data, endpoint) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.post(`api/${endpoint}/addItem`, data, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+
+    if (response.status === 200) {
+      if (response.data.token) {
+        await AsyncStorage.setItem('token', response.data.token);
+      }
+    } 
+    return response.data;
+  } catch (error) {
+    return {error: error}
+  }
+}
+
+export const getLocationList = async (endpoint, type, user_id) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.get(`api/${endpoint}/getList?type=${type}&user_id=${user_id}`, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+
+    if (response.status === 200) {
+      if (response.data.token) {
+        await AsyncStorage.setItem('token', response.data.token);
+      }
+    } 
+    return response.data;
+  } catch (error) {
+    return {error: error}
+  }
+}
+
+export const updateUserStatus = async (data, endpoint) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.post(`api/${endpoint}/updateUserStatus`, data, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+
+    if (response.status === 200) {
+      if (response.data.token) {
+        await AsyncStorage.setItem('token', response.data.token);
+      }
+    } 
+    return response.data;
+  } catch (error) {
+    return {error: error}
+  }
+}
+
+export const removeAccount = async (data, endpoint) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.post(`api/${endpoint}/removeAccount`, data, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+
+    if (response.status === 200) {
+      if (response.data.token) {
+        await AsyncStorage.setItem('token', response.data.token);
+      }
+    } 
+    return response.data;
+  } catch (error) {
+    return {error: error}
+  }
+}
+
+export const Updates = async (updateData, endpoint) => {
+  try {
+    console.log("update", updateData);
+    // Existing token (obtained from AsyncStorage or login)
+    const existingToken = await AsyncStorage.getItem('token');
+
+    // Include token in Authorization header
+    const response = await axios.post(`api/${endpoint}/update`, updateData, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`,
+        userRole: 'Admin'
+      }
+    });
+    console.log('Success');
+    
+
+    // If the update is successful, you can potentially update the token in AsyncStorage
+    if (response.status === 200) {
+      // Optionally, if the backend sends a new token for some reason
+      if (response.data.token) {
+        await AsyncStorage.setItem('token', response.data.token);
+      }
+    } 
+    return response.data;
+  } catch (error) {
+    throw error;
+  }
+}
+
+export const UpdateUser = async (updateData, endpoint) => {
+  try {
+    console.log("update");
+    // Existing token (obtained from AsyncStorage or login)
+    const existingToken = await AsyncStorage.getItem('token');
+
+    // Include token in Authorization header
+    const response = await axios.post(`api/${endpoint}/updateUser`, updateData, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+
+    // If the update is successful, you can potentially update the token in AsyncStorage
+    if (response.status === 200) {
+      // Optionally, if the backend sends a new token for some reason
+      if (response.data.token) {
+        await AsyncStorage.setItem('token', response.data.token);
+      }
+    } 
+    console.log(response.data);
+    
+    return response.data;
+  } catch (error) {
+    throw error;
+  }
+}
+
+export const updateUserInfo = async (updateData, endpoint) => {
+  try {
+    console.log("update");
+    // Existing token (obtained from AsyncStorage or login)
+    const existingToken = await AsyncStorage.getItem('token');
+
+    // Include token in Authorization header
+    const response = await axios.post(`api/${endpoint}/updateUserInfo`, updateData, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+
+    // If the update is successful, you can potentially update the token in AsyncStorage
+    if (response.status === 200) {
+      // Optionally, if the backend sends a new token for some reason
+      if (response.data.token) {
+        await AsyncStorage.setItem('token', response.data.token);
+      }
+    } 
+    console.log(response.data);
+    
+    return response.data;
+  } catch (error) {
+    throw error;
+  }
+}
+
+export const updateDocuments = async (updateData, endpoint) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.post(`api/${endpoint}/updateDocuments`, updateData, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+
+    if (response.status === 200) {
+      if (response.data.token) {
+        await AsyncStorage.setItem('token', response.data.token);
+      }
+    }
+    return response.data;
+  } catch (error) {
+    return { error: error };
+  }
+}
+
+export const PostJob = async (jobData, endpoint) => {
+  try {
+    const response = await axios.post(`api/${endpoint}/postJob`, jobData);
+    return response.data;
+  } catch (error) {
+    return { error: error };
+  }
+};
+
+export const getAllRestaurants = async () => {
+  try {
+    const response = await axios.get(`api/hospitality/getAllRestaurants`);
+    return response.data;
+  } catch (error) {
+    return { error: error };
+  }
+};
+
+export const getAllHotels = async () => {
+  try {
+    const response = await axios.get(`api/hospitality/getAllHotels`);
+    return response.data;
+  } catch (error) {
+    return { error: error };
+  }
+};
+
+export const getFacility = async (endpoint, role) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.get(`api/${endpoint}/facility`, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`,
+        Role: role
+      }
+    });
+
+    if (response.status === 200) {
+      if (response.data.token) {
+        await AsyncStorage.setItem('token', response.data.token);
+      }
+    } else if (response.status === 401) {
+      console.log('Token is expired');
+    }
+    return response.data.jobData;
+  } catch (error) {
+    return { error: error };
+  }
+};
+
+export const getBidIDs = async () => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.get(`api/admin/getBidIDs`, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`,
+      }
+    });
+
+    if (response.data.token) {
+      await AsyncStorage.setItem('token', response.data.token);
+    }
+    return response.data.bidList;
+  } catch (error) {
+    return { error: error };
+  }
+};
+
+export const getContractorBidIds = async (data) => {
+  try {
+    const response = await axios.post(`api/hospitality/getContractorBidIds`, data);
+    return response.data.bidList;
+  } catch (error) {
+    return { error: error };
+  }
+};
+
+export const getAllUsersName = async () => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.get(`api/admin/getAllUsersName`, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`,
+      }
+    });
+
+    if (response.data.token) {
+      await AsyncStorage.setItem('token', response.data.token);
+    }
+    return response.data.userList;
+  } catch (error) {
+    return { error: error };
+  }
+};
+
+export const getAllContractorList = async (data) => {
+  try {
+    const response = await axios.post(`api/hospitality/getAllContractorList`, data);
+    return response.data.userList;
+  } catch (error) {
+    return { error: error };
+  }
+};
+
+export const getCaregiverTimesheets = async (data, endpoint) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.post(`api/${endpoint}/getCaregiverTimesheets`, data, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+
+    if (response.data.token) {
+      await AsyncStorage.setItem('token', response.data.token);
+    }
+    return response.data;
+  } catch (error) {
+    return { error: error };
+  }
+};
+
+export const getAllUsersList = async (data, endpoint) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.post(`api/${endpoint}/getAllUsersList`, data, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+
+    if (response.data.token) {
+      await AsyncStorage.setItem('token', response.data.token);
+    }
+    return response.data;
+  } catch (error) {
+    return { error: error };
+  }
+};
+
+export const allCaregivers = async (data, endpoint) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.post(`api/${endpoint}/allCaregivers`, data, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+
+    if (response.data.token) {
+      await AsyncStorage.setItem('token', response.data.token);
+    }
+    return response.data;
+  } catch (error) {
+    return { error: error };
+  }
+};
+
+export const getUserImage = async (data, endpoint) => {
+  try {
+    const response = await axios.post(`api/${endpoint}/getUserImage`, data);
+    return response.data.data;
+  } catch (error) {
+    return { error: error };
+  }
+};
+
+export const sendMessage = async (data) => {
+  try {
+    const response = await axios.post(`api/admin/sendMessage`, data);
+    return response.data.data;
+  } catch (error) {
+    return { error: error };
+  }
+};
+
+export const getAdminInfo = async (data) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.post(`api/admin/getAdminInfo`, data, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+
+    if (response.data.token) {
+      await AsyncStorage.setItem('token', response.data.token);
+    }
+    return response.data;
+  } catch (error) {
+    console.log(JSON.stringify(error));
+    return { error: error };
+  }
+};
+
+export const Jobs = async (data, endpoint, role) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const aic = await AsyncStorage.getItem('aic');
+    console.log("aic:", aic);
+    const response = await axios.post(`api/${endpoint}/shifts`, data, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`,
+        Role: role
+      }
+    });
+
+    if (response?.data?.token) {
+      await AsyncStorage.setItem('token', response.data.token);
+    }
+    return response.data;
+  } catch (error) {
+    console.log(JSON.stringify(error));
+    return { error: error };
+  }
+};
+
+export const Job = async (jobData, endpoint) => {
+  try {
+    const response = await axios.post(`api/${endpoint}/getJob`, jobData);
+    return response.data;
+  } catch (error) {
+    console.log(JSON.stringify(error));
+    return { error: error };
+  }
+};
+
+export const removeJob = async (jobData, endpoint) => {
+  try {
+    const response = await axios.post(`api/${endpoint}/removeJob`, jobData);
+    return response.data;
+  } catch (error) {
+    return { error: error };
+  }
+};
+
+export const updateHoursStatus = async (jobData, endpoint) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.post(`api/${endpoint}/updateHoursStatus`, jobData, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+    // If the update is successful, you can potentially update the token in AsyncStorage
+    if (response.status === 200) {
+      // Optionally, if the backend sends a new token for some reason
+      if (response.data.token) {
+        await AsyncStorage.setItem('token', response.data.token);
+      }
+    } else if (response.status === 401) {
+      console.log('Token is expired')
+      // navigation.navigate('Home')
+    }
+    return response.data;
+  } catch (error) {
+    return { error: error };
+  }
+};
+
+export const setAwarded = async (jobData, endpoint) => {
+  try {
+    const response = await axios.post(`api/${endpoint}/setAwarded`, jobData);
+    return response.data;
+  } catch (error) {
+    return { error: error };
+  }
+};
+
+export const updateJobRatings = async (jobData, endpoint) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.post(`api/${endpoint}/updateJobRatings`, jobData, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+    // If the update is successful, you can potentially update the token in AsyncStorage
+    if (response.status === 200) {
+      // Optionally, if the backend sends a new token for some reason
+      if (response.data.token) {
+        await AsyncStorage.setItem('token', response.data.token);
+      }
+    } else if (response.status === 401) {
+      console.log('Token is expired')
+      // navigation.navigate('Home')
+    }
+    return response.data;
+  } catch (error) {
+    return { error: error };
+  }
+};
+
+export const updateJobTSVerify = async (jobData, endpoint) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.post(`api/${endpoint}/updateJobTSVerify`, jobData, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+    // If the update is successful, you can potentially update the token in AsyncStorage
+    if (response.status === 200) {
+      // Optionally, if the backend sends a new token for some reason
+      if (response.data.token) {
+        await AsyncStorage.setItem('token', response.data.token);
+      }
+    } else if (response.status === 401) {
+      console.log('Token is expired')
+      // navigation.navigate('Home')
+    }
+    return response.data;
+  } catch (error) {
+    return { error: error };
+  }
+};
+
+export const updateTimeSheet = async (data, endpoint) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.post(`api/${endpoint}/updateTimeSheet`, data, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+    // If the update is successful, you can potentially update the token in AsyncStorage
+    if (response.status === 200) {
+      // Optionally, if the backend sends a new token for some reason
+      if (response.data.token) {
+        await AsyncStorage.setItem('token', response.data.token);
+      }
+    } else if (response.status === 401) {
+      console.log('Token is expired')
+      // navigation.navigate('Home')
+    }
+    return response.data;
+  } catch (error) {
+    return { error: error };
+  }
+};
+
+export const getClientInfoWithJobId = async (data, endpoint) => {
+  try {
+    const response = await axios.post(`api/${endpoint}/getClientInfo`, data);
+    return response.data.userData;
+  } catch (error) {
+    return { error: error };
+  }
+};
+
+export const getTimesheet = async (data) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.post(`api/jobs/getTimesheet`, data, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+
+    if (response.status === 200) {
+      if (response.data.token) {
+        await AsyncStorage.setItem('token', response.data.token);
+      }
+    } else if (response.status === 401) {
+      console.log('Token is expired');
+    }
+    return response.data.data;
+  } catch (error) {
+    return { error: error };
+  }
+};
+
+export const MyShift = async (endpoint, role) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.get(`api/${endpoint}/myShift`, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`,
+        Role: role
+      }
+    });
+
+    if (response.status === 200) {
+      if (response.data.token) {
+        await AsyncStorage.setItem('token', response.data.token);
+      }
+    } else if (response.status === 401) {
+      console.log('Token is expired')
+    }
+    return response.data.jobData;
+  } catch (error) {
+    console.log(error);
+    return { error: error };
+  }
+};
+
+export const RestaurantWorkShifts = async (endpoint, data) => {
+  try {
+    const response = await axios.post(`api/${endpoint}/myShift`, data);
+    return response.data.jobData;
+  } catch (error) {
+    console.log(error);
+    return { error: error };
+  }
+};
+
+export const UpdateTime = async (data, endpoint) => {
+  try {
+    console.log('success')
+    // Existing token (obtained from AsyncStorage or login)
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.post(`api/${endpoint}/updateTime`, data, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+    // const response = await axios.get("/test");
+    return response.data;
+  } catch (error) {
+    console.log(error);
+    throw error;
+  }
+}
+
+export const GetDashboardData = async (endpoint, role) => {
+  try {
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.get(`api/${endpoint}/getDashboardData`, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`,
+        Role: role
+      }
+    });
+    
+    if (response.status === 200) {
+      if (response.data.token) {
+        await AsyncStorage.setItem('token', response.data.token);
+      }
+    } else if (response.status === 401) {
+      console.log('Token is expired');
+    }
+    return response.data.jobData;
+  } catch (error) {
+    console.log(error);
+    throw error;
+  }
+}
+
+export const PostBid = async (bidData, endpoint) => {
+  try {
+    console.log('success')
+    const existingToken = await AsyncStorage.getItem('token');
+    const response = await axios.post(`api/${endpoint}/postBid`, bidData, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`
+      }
+    });
+    return response.data;
+  } catch (error) {
+    return {error: error};
+  }
+};
+
+export const isTokenInLocalStorage = async () => {
+  try {
+    const token = await AsyncStorage.getItem('token');
+    return token !== null;
+
+  } catch (error) {
+    console.error('Error checking for token in localstorage:', error);
+    return false;
+  }
+}
+
+const failedAlert = (msg) => {
+  Alert.alert(
+    "SignIn failed",
+    "",
+    [
+      {
+        text: msg,
+        onPress: () => {
+          console.log('OK pressed')
+        },
+      },
+    ],
+    { cancelable: false }
+  )
+}
+
+export const Clinician = async (endpoint, role) => {
+  try {
+    // console.log("jobs");
+    // Existing token (obtained from AsyncStorage or login)
+    const existingToken = await AsyncStorage.getItem('token');
+    console.log(existingToken)
+    // Include token in Authorization header
+    const response = await axios.get(`api/${endpoint}`, {
+      headers: {
+        Authorization: `Bearer ${existingToken}`,
+        Role: role
+      }
+    });
+    console.log(response.data.jobData)
+    // If the update is successful, you can potentially update the token in AsyncStorage
+    if (response.status === 200) {
+      // Optionally, if the backend sends a new token for some reason
+      if (response.data.token) {
+        await AsyncStorage.setItem('token', response.data.token);
+      }
+    } else if (response.status === 401) {
+      console.log('Token is expired')
+      // navigation.navigate('Home')
+    }
+    return response.data.jobData;
+  } catch (error) {
+    console.log(error);
+    
+    throw error;
+  }
+}
+
+export const fetchInvoices = async () => {
+  try {
+    console.log('fetch');
+    
+    const response = await axios.get(`api/jobs/generateInvoice`);
+    console.log('success', response.data);
+    
+    return response.data
+  } catch (error) {
+    return {error: error.response.data.message}
+  }
+};
+
+
+export const sendInvoice = async (facilityId, email) => {
+  try {
+    console.log('fetch', facilityId, email);
+    
+    const response = await axios.post('api/jobs/sendInvoice', {
+      facilityId: facilityId,
+      email: email,
+    });
+    console.log('success');
+    
+    return response.data.invoiceData
+  } catch (error) {
+      console.error('Error generating invoice:', error);
+      return {error: error.response.data.message}
+  }
+};
